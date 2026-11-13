@@ -63,6 +63,7 @@ jobs:
           $q = New-Object 'System.Collections.Generic.Queue[int]'
           [void]$seen.Add($RootPid); $q.Enqueue($RootPid)
           $node = $false
+          $slp = $false
           while ($q.Count -gt 0) {
             $p = $q.Dequeue()
             foreach ($c in ($all | Where-Object { $_.ParentProcessId -eq $p })) {
@@ -70,10 +71,12 @@ jobs:
                 $q.Enqueue([int]$c.ProcessId)
                 "DESC pid=$($c.ProcessId) ppid=$($c.ParentProcessId) name=$($c.Name)"
                 if ($c.Name -ieq 'node.exe') { $node = $true }
+                if ($c.Name -ieq 'sleep.exe') { $slp = $true }
               }
             }
           }
           "NODE_IN_DESCENDANTS=$node"
+          "SLEEP_IN_DESCENDANTS=$slp"
           $any = @($all | Where-Object { $_.Name -ieq 'node.exe' -and $_.CommandLine -like '*setTimeout*' }).Count
           "NODE_STANDIN_ANYWHERE=$($any -gt 0)"
           PS1
@@ -120,7 +123,7 @@ jobs:
           snap() { printf '\n--- hc read %s (tail) ---\n' "$1"; H read "$1" --lines 40 2>&1 | tail -${2:-15}; }
           fgpid() { H get --json "$1" 2>/dev/null | jq -r '.foreground.pid // empty' | tr -d '\r'; }
           walk() { printf '\n--- descendant walk from %s ---\n' "$1"; { time powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$WALK" -RootPid "${1:-0}"; } 2>&1; }
-          psw() { printf '\n--- ps -W ---\n'; { time ps -W; } 2>&1 | grep -iE 'node|sleep|bash|pwsh|real|user|sys|PID' | head -20; }
+          psw() { printf '\n--- ps -W ---\n'; { time ps -W; } 2>&1 | grep -iE 'node\.exe|sleep|bash\.exe|pwsh\.exe|WINPID|^real|^user|^sys[[:space:]]' | head -30; }
           ensure_server() {
             printf 'server status at step start:\n'; H server status 2>&1
             H server start 2>&1 | tail -3
@@ -235,13 +238,18 @@ jobs:
             kv "Q2 $label idle fg" "$(H get --json "$t" | jq -c '[.foreground.name,.foreground.pid,.state,.status]' 2>&1 | tr -d '\r')"
 
             echo "## sleep running"; H send "$t" -- "$sleepline"; sleep 4
-            H get --json "$t"; pid=$(fgpid "$t"); echo "fg pid=$pid"; walk "$pid"; psw
+            snap "$t" 6
+            H get --json "$t"; pid=$(fgpid "$t"); echo "fg pid=$pid"; w=$(walk "$pid"); printf '%s
+' "$w"; psw
+            kv "Q2 $label sleep walk" "$(printf '%s' "$w" | grep -E 'SLEEP_|NODE_|ROOT' | tr -d '' | tr '
+' ' ')"
             kv "Q2 $label sleep fg" "$(H get --json "$t" | jq -c '[.foreground.name,.foreground.pid,.state,.status]' 2>&1 | tr -d '\r')"
             H keys "$t" ctrl+c; sleep 3
             echo "## after sleep interrupt"; H get --json "$t"
 
             echo "## node stand-in running"
             H send "$t" -- 'node -e "setTimeout(()=>{},60000)"'; sleep 5
+            snap "$t" 6
             H get --json "$t"; pid=$(fgpid "$t"); echo "fg pid=$pid"
             w=$(walk "$pid"); printf '%s\n' "$w"; psw
             kv "Q2 $label node fg" "$(H get --json "$t" | jq -c '[.foreground.name,.foreground.pid,.state,.status]' 2>&1 | tr -d '\r')"
@@ -295,7 +303,8 @@ jobs:
             H send "$t" -- '/exit'; sleep 2
             MSYS_NO_PATHCONV=1 H send "$t" -- '/exit'; sleep 2
             snap "$t" 25
-            kv "Q3 send text (echo /exit, /exit)" "$(H read "$t" --lines 60 2>&1 | grep -E 'exit' | grep -vE '^.*\$ ' | tr -d '\r' | tr '\n' '~' | cut -c1-400)"
+            kv "Q3 send text (echo /exit x2, then /exit x2)" "$(H read "$t" --lines 60 2>&1 | grep -E 'exit' | tr -d '' | tr '
+' '~' | cut -c1-500)"
 
             sec "Q3 cwd variants"
             cwdcheck() {  # <tag> <cwdarg> [env assignment]
@@ -305,9 +314,9 @@ jobs:
               if [ -z "$a" ]; then kv "Q3 cwd $tag" "hc run failed for cwd=$c"; return; fi
               waitfg "$a"
               H get --json "$a" | jq -c '[.cwd,.foreground.cwd,.state]'
-              H send "$a" -- 'echo "PW:$(pwd)|$(pwd -W)"'; waittext "$a" 'PW:/' 10
+              H send "$a" -- 'echo "PW:$(pwd)|$(pwd -W)"'; waittext "$a" 'PW:[^$]' 10
               snap "$a" 6
-              kv "Q3 cwd $tag" "arg=$c get=$(H get --json "$a" | jq -c '[.cwd,.foreground.cwd]' | tr -d '\r') pane=$(H read "$a" --lines 40 2>&1 | grep -E 'PW:/' | tail -1 | tr -d '\r')"
+              kv "Q3 cwd $tag" "arg=$c get=$(H get --json "$a" | jq -c '[.cwd,.foreground.cwd]' | tr -d '\r') pane=$(H read "$a" --lines 40 2>&1 | grep -E 'PW:[^$]' | tail -1 | tr -d '\r')"
             }
             echo "# A: posix cwd, default conversion"
             cwdcheck posix-conv "$posix"
