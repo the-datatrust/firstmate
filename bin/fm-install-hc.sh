@@ -18,11 +18,11 @@
 # `herdr-core` before the `hc` alias, so the asset name is what gets installed.
 #
 # Windows (Git Bash, MSYS or Cygwin, x86_64 only) pins herdr-core 0.1.21 through
-# FM_HC_WINDOWS_PIN_VERSION, separate from the pin above, and the
-# final version gate checks that pin. The zip is extracted with Windows' own
-# System32 tar.exe, because GNU tar cannot open zips. Both `herdr-core.exe` and
-# its `conpty/` directory are installed, because the core fails to start without
-# conpty/conpty.dll beside it.
+# FM_HC_WINDOWS_PIN_VERSION, separate from the pin above; the Windows arm points
+# FM_HC_PIN_VERSION at it, so the URL and the final version gate use it. The zip
+# is extracted with Windows' own System32 tar.exe, because GNU tar cannot open
+# zips. Both `herdr-core.exe` and its `conpty/` directory are installed, because
+# the core fails to start without conpty/conpty.dll beside it.
 set -eu
 
 FM_HC_PIN_VERSION=0.1.14
@@ -42,8 +42,6 @@ DESTINATION=${1:?usage: fm-install-hc.sh <destination-directory>}
 
 os=$(uname -s)
 arch=$(uname -m)
-PIN_VERSION=$FM_HC_PIN_VERSION
-ASSET_EXT=tar.gz
 case "${os}-${arch}" in
   Linux-x86_64)
     TARGET=linux-x86_64
@@ -64,7 +62,7 @@ case "${os}-${arch}" in
   MINGW*-x86_64|MSYS*-x86_64|CYGWIN*-x86_64)
     TARGET=windows-x86_64
     SHA256=a8984634c35b58ba82d0aec078d5a5e6004da01d5a25b3daf822ab5e31c7312b
-    PIN_VERSION=$FM_HC_WINDOWS_PIN_VERSION
+    FM_HC_PIN_VERSION=$FM_HC_WINDOWS_PIN_VERSION
     ASSET_EXT=zip
     ;;
   *)
@@ -72,8 +70,8 @@ case "${os}-${arch}" in
     ;;
 esac
 
-ASSET="herdr-core-${TARGET}.${ASSET_EXT}"
-URL="${FM_HC_RELEASES}/${PIN_VERSION}/${ASSET}"
+ASSET="herdr-core-${TARGET}.${ASSET_EXT:-tar.gz}"
+URL="${FM_HC_RELEASES}/${FM_HC_PIN_VERSION}/${ASSET}"
 TMP=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/fm-hc-install.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
@@ -92,8 +90,8 @@ fi
 
 [ "$ACTUAL_SHA256" = "$SHA256" ] || die "checksum mismatch for $ASSET (expected $SHA256, got $ACTUAL_SHA256)"
 
-if [ "$ASSET_EXT" = zip ]; then
-  WIN_TAR="${SYSTEMROOT:-${WINDIR:-C:\\Windows}}/System32/tar.exe"
+if [ "${ASSET_EXT:-}" = zip ]; then
+  WIN_TAR="${SYSTEMROOT:-${WINDIR:-C:\Windows}}/System32/tar.exe"
   [ -x "$WIN_TAR" ] || die "need Windows tar.exe at $WIN_TAR to extract $ASSET"
   "$WIN_TAR" -xf "$(cygpath -w "$TMP/$ASSET")" -C "$(cygpath -w "$TMP")" || die "could not extract $ASSET"
   [ -f "$TMP/herdr-core.exe" ] || die "$ASSET did not contain a herdr-core.exe binary"
@@ -102,18 +100,23 @@ if [ "$ASSET_EXT" = zip ]; then
   install -m 0755 "$TMP/herdr-core.exe" "$DESTINATION/herdr-core.exe"
   rm -rf "$DESTINATION/conpty"
   cp -R "$TMP/conpty" "$DESTINATION/conpty"
-else
-  tar -xzf "$TMP/$ASSET" -C "$TMP" || die "could not extract $ASSET"
-  [ -f "$TMP/herdr-core" ] || die "$ASSET did not contain a herdr-core binary"
-
-  mkdir -p "$DESTINATION"
-  install -m 0755 "$TMP/herdr-core" "$DESTINATION/herdr-core"
+  installed_version=$("$DESTINATION/herdr-core" --version 2>/dev/null | awk '{print $2; exit}')
+  [ "$installed_version" = "$FM_HC_PIN_VERSION" ]     || die "installed herdr-core reports version '$installed_version', expected $FM_HC_PIN_VERSION"
+  printf 'fm-install-hc.sh: installed herdr-core %s (protocol generation 1) to %s/herdr-core
+'     "$installed_version" "$DESTINATION" >&2
+  exit 0
 fi
+
+tar -xzf "$TMP/$ASSET" -C "$TMP" || die "could not extract $ASSET"
+[ -f "$TMP/herdr-core" ] || die "$ASSET did not contain a herdr-core binary"
+
+mkdir -p "$DESTINATION"
+install -m 0755 "$TMP/herdr-core" "$DESTINATION/herdr-core"
 
 # Post-install version and self-identity gates (no floating latest). The
 # binary self-identifies as `hc x.y.z`; anything else is not Herdr Core.
 installed_version=$("$DESTINATION/herdr-core" --version 2>/dev/null | awk '{print $2; exit}')
-[ "$installed_version" = "$PIN_VERSION" ] \
-  || die "installed herdr-core reports version '$installed_version', expected $PIN_VERSION"
+[ "$installed_version" = "$FM_HC_PIN_VERSION" ] \
+  || die "installed herdr-core reports version '$installed_version', expected $FM_HC_PIN_VERSION"
 printf 'fm-install-hc.sh: installed herdr-core %s (protocol generation 1) to %s/herdr-core\n' \
   "$installed_version" "$DESTINATION" >&2

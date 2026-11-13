@@ -37,12 +37,17 @@ cat > "$FAKEBIN/cmd" <<'SH'
 #!/usr/bin/env bash
 # cmd /c mklink /J <link> <target> | cmd /c rmdir <link>
 [ "$1" = /c ] || exit 1
+if [ "$2" = mklink ]; then
+  if [ "${FM_TEST_MKLINK_FAIL:-}" = 1 ] || { [ -n "${FM_TEST_MKLINK_FAIL_ON:-}" ] && [[ "$4" == *"$FM_TEST_MKLINK_FAIL_ON"* ]]; }; then
+    echo "mklink-boom" >&2
+    exit 1
+  fi
+fi
 if [ -n "$FM_TEST_REAL_CMD" ]; then
-  [ "$2 ${FM_TEST_MKLINK_FAIL:-}" = "mklink 1" ] || exec "$FM_TEST_REAL_CMD" "$@"
-  exit 0
+  exec "$FM_TEST_REAL_CMD" "$@"
 fi
 case "$2" in
-  mklink) [ "${FM_TEST_MKLINK_FAIL:-}" = 1 ] || ln -s "$5" "$4" ;;
+  mklink) ln -s "$5" "$4" ;;
   rmdir) rm "$3" ;;
 esac
 SH
@@ -131,6 +136,29 @@ test_repair_restores_text_when_junction_fails() {
   pass "windows-checkout: a failed mklink restores the text file"
 }
 
+test_repair_rolls_back_and_reports_mklink_output() {
+  local clone
+  clone=$(make_clone rollback)
+  if FM_TEST_MKLINK_FAIL_ON=firstmate-calm run "$WIN_S" "$clone" repair 2>"$TMP/err"; then fail "repair claimed success"; fi
+  grep -q mklink-boom "$TMP/err" || fail "mklink output not reported: $(cat "$TMP/err")"
+  [ -f "$clone/.claude/skills" ] && [ ! -L "$clone/.claude/skills" ] || fail "first link was not rolled back"
+  [ "$(cat "$clone/.claude/skills")" = ../.agents/skills ] || fail "first text file not restored"
+  [ -z "$(git -C "$clone" status --porcelain)" ] || fail "status after rollback: $(git -C "$clone" status --porcelain)"
+  ! git -C "$clone" ls-files -v | grep -q '^S' || fail "skip-worktree set after rollback"
+  pass "windows-checkout: a failure on a later link rolls back earlier links and reports mklink's output"
+}
+
+test_check_hint_names_symlinks_setting() {
+  local clone out
+  clone=$(make_clone hint)
+  out=$(run "$WIN_S" "$clone" check)
+  case "$out" in *"core.symlinks=false; first choice: Developer Mode"*"fallback: bin/fm-windows-checkout.sh repair)"*) ;; *) fail "hint: $out" ;; esac
+  git -C "$clone" config core.symlinks true
+  out=$(run "$WIN_S" "$clone" check)
+  case "$out" in *"link; core.symlinks="*) fail "hint names symlinks when true: $out" ;; esac
+  pass "windows-checkout: the broken-link hint names Developer Mode first and core.symlinks when it is not true"
+}
+
 test_undo_restores_and_is_idempotent() {
   local clone ex
   clone=$(make_clone undo)
@@ -140,10 +168,10 @@ test_undo_restores_and_is_idempotent() {
   [ -f "$clone/.agents/skills/a/SKILL.md" ] || fail "undo touched the target"
   [ -z "$(git -C "$clone" status --porcelain)" ] || fail "status after undo: $(git -C "$clone" status --porcelain)"
   ex=$(git -C "$clone" rev-parse --git-path info/exclude)
-  ! grep -q '^/.claude/skills$' "$clone/$ex" || fail "exclude line remains"
+  grep -q '^/.claude/skills$' "$clone/$ex" || fail "undo removed the shared exclude line"
   ! git -C "$clone" ls-files -v .claude/skills | grep -q '^S' || fail "skip-worktree remains"
   run "$WIN_S" "$clone" undo || fail "second undo failed"
-  pass "windows-checkout: undo restores the tracked files, flags and exclude, and is idempotent"
+  pass "windows-checkout: undo restores the tracked files and flags, keeps the shared exclude, and is idempotent"
 }
 
 test_bootstrap_reports_and_installs() {
@@ -187,6 +215,8 @@ fm_test_run \
   test_repair_then_check_status_add_and_idempotency \
   test_repair_refuses_user_data \
   test_repair_restores_text_when_junction_fails \
+  test_repair_rolls_back_and_reports_mklink_output \
+  test_check_hint_names_symlinks_setting \
   test_undo_restores_and_is_idempotent \
   test_bootstrap_reports_and_installs \
   test_real_mklink_on_windows

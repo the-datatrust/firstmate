@@ -1574,8 +1574,12 @@ detect_local_tools() {
     command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
   done
   # Windows only: a clone without symlinks leaves directory links as text files.
-  if is_windows_shell     && "$SCRIPT_DIR/fm-windows-checkout.sh" check 2>/dev/null | grep -q '^WINDOWS_CHECKOUT: broken-link '; then
-    missing_tool_diagnostic windows-checkout
+  if is_windows_shell; then
+    local checkout_report
+    checkout_report=$("$SCRIPT_DIR/fm-windows-checkout.sh" check 2>/dev/null || true)
+    case "$checkout_report" in
+      *"WINDOWS_CHECKOUT: broken-link "*) missing_tool_diagnostic windows-checkout ;;
+    esac
   fi
   # The treehouse lease-support upgrade check is only relevant when the resolved
   # backend actually requires treehouse (every backend except orca, which owns its

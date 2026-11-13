@@ -82,18 +82,23 @@ fi
 
 case "$ARCHIVE" in
   *.zip)
-    WIN_TAR="${SYSTEMROOT:-${WINDIR:-C:\\Windows}}/System32/tar.exe"
+    WIN_TAR="${SYSTEMROOT:-${WINDIR:-C:\Windows}}/System32/tar.exe"
     [ -x "$WIN_TAR" ] || die "need Windows tar.exe at $WIN_TAR to extract $ARCHIVE"
-    "$WIN_TAR" -xf "$(cygpath -w "$TMP/$ARCHIVE")" -C "$(cygpath -w "$TMP")" \
-      || die "could not extract $ARCHIVE"
+    "$WIN_TAR" -xf "$(cygpath -w "$TMP/$ARCHIVE")" -C "$(cygpath -w "$TMP")"       || die "could not extract $ARCHIVE"
+    [ -f "$TMP/treehouse.exe" ] || die "archive $ARCHIVE did not contain treehouse.exe"
+    mkdir -p "$DESTINATION"
+    install -m 0755 "$TMP/treehouse.exe" "$DESTINATION/treehouse.exe"
+    installed_version=$("$DESTINATION/treehouse" --version 2>/dev/null | tr -d '[:space:]')
+    [ "$installed_version" = "v${FM_TREEHOUSE_CI_VERSION}" ]       || die "installed treehouse version is '${installed_version:-<empty>}', expected exact pin v${FM_TREEHOUSE_CI_VERSION}"
+    printf 'fm-install-treehouse.sh: installed treehouse %s to %s
+'       "$installed_version" "$DESTINATION/treehouse" >&2
+    "$DESTINATION/treehouse" --version
+    exit 0
     ;;
-  *) tar -xzf "$TMP/$ARCHIVE" -C "$TMP" ;;
 esac
+tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
 # Archive layout: a single `treehouse` binary at the archive root (verified for v2.0.1).
-# The Windows zip holds `treehouse.exe` at its root instead.
-if [ -f "$TMP/treehouse.exe" ]; then
-  BIN="$TMP/treehouse.exe"
-elif [ -f "$TMP/treehouse" ]; then
+if [ -f "$TMP/treehouse" ]; then
   BIN="$TMP/treehouse"
 elif [ -f "$TMP/treehouse-v${FM_TREEHOUSE_CI_VERSION}/treehouse" ]; then
   BIN="$TMP/treehouse-v${FM_TREEHOUSE_CI_VERSION}/treehouse"
@@ -103,10 +108,7 @@ else
 fi
 
 mkdir -p "$DESTINATION"
-case "$BIN" in
-  *.exe) install -m 0755 "$BIN" "$DESTINATION/treehouse.exe" ;;
-  *) install -m 0755 "$BIN" "$DESTINATION/treehouse" ;;
-esac
+install -m 0755 "$BIN" "$DESTINATION/treehouse"
 
 installed_version=$("$DESTINATION/treehouse" --version 2>/dev/null | tr -d '[:space:]')
 # treehouse prints "v2.0.1" (leading v) on --version.

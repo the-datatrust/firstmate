@@ -8,6 +8,10 @@
 #   fm-windows-checkout.sh undo     put the tracked text files back
 #   fm-windows-checkout.sh --help
 #
+# First choice: turn on Windows Developer Mode, set `git config core.symlinks
+# true` and re-checkout, so git makes real symlinks. Junction repair is the
+# fallback for machines that cannot do that.
+#
 # Why: without Developer Mode, git cannot create symlinks, so a tracked symlink
 # checks out as a text file holding its target. Only the two DIRECTORY links
 # matter to the Claude-only setup: .claude/skills and
@@ -16,7 +20,8 @@
 #
 # check: on any other platform (uname -s not MINGW*, MSYS* or CYGWIN*) it prints
 # nothing. On Windows it prints one line per finding:
-#   WINDOWS_CHECKOUT: broken-link <path> (text file, not a directory link; repair: bin/fm-windows-checkout.sh repair)
+#   WINDOWS_CHECKOUT: broken-link <path> (text file, not a directory link; first choice: Developer Mode + core.symlinks=true and re-checkout; fallback: bin/fm-windows-checkout.sh repair)
+# When core.symlinks is not true the hint gains "core.symlinks=<value or unset>;".
 #   WINDOWS_CHECKOUT: autocrlf core.autocrlf=true can rewrite line endings; clone with core.autocrlf=false (.gitattributes already pins the important types)
 # fm-bootstrap.sh turns a broken-link line into a MISSING: windows-checkout line.
 #
@@ -30,12 +35,18 @@
 #   4. runs `git update-index --skip-worktree <path>` so status stays clean,
 #   5. appends `/<path>` once to the repo's info/exclude, because skip-worktree
 #      alone lets `git add -A` follow the junction and stage the target's files.
+#   It is all-or-nothing: if any link fails, the links this run created are
+#   removed and their text files restored, and the failure message includes
+#   mklink's own output.
 #
 # undo: idempotent inverse. A junction is removed with `cmd /c rmdir`, which
 # removes only the link and never the target's contents; a real directory is
-# refused. Then it clears skip-worktree, removes the exclude line and restores
-# the tracked text file with `git checkout -- <path>`. Run it before a `git pull`
-# that retargets or deletes a link, which otherwise aborts.
+# refused. Then it clears skip-worktree and restores the tracked text file with
+# `git checkout -- <path>`. It leaves the info/exclude lines in place: that file
+# lives in the common git dir, so it is shared by every worktree of the clone,
+# and removing a line would unprotect another worktree that still has a junction.
+# An exclude line has no effect on a tracked text file. Run undo before a
+# `git pull` that retargets or deletes a link, which otherwise aborts.
 #
 # FM_WINCHECKOUT_ROOT selects the repository (default: this script's checkout).
 set -eu
@@ -88,14 +99,19 @@ winpath() {  # <path>
 EXCLUDE=$(git rev-parse --git-path info/exclude)
 
 if [ "$cmd_arg" = check ]; then
+  symlinks=$(git config --get core.symlinks 2>/dev/null || true)
   while IFS= read -r p; do
     link_target "$p" >/dev/null || continue
     if [ ! -d "$p" ]; then
-      printf 'WINDOWS_CHECKOUT: broken-link %s (text file, not a directory link; repair: bin/fm-windows-checkout.sh repair)\n' "$p"
+      note=
+      [ "$symlinks" = true ] || note="core.symlinks=${symlinks:-unset}; "
+      printf 'WINDOWS_CHECKOUT: broken-link %s (text file, not a directory link; %sfirst choice: Developer Mode + core.symlinks=true and re-checkout; fallback: bin/fm-windows-checkout.sh repair)
+' "$p" "$note"
     fi
   done <<< "$LINKS"
   if [ "$(git config --get core.autocrlf 2>/dev/null || true)" = true ]; then
-    printf 'WINDOWS_CHECKOUT: autocrlf core.autocrlf=true can rewrite line endings; clone with core.autocrlf=false (.gitattributes already pins the important types)\n'
+    printf 'WINDOWS_CHECKOUT: autocrlf core.autocrlf=true can rewrite line endings; clone with core.autocrlf=false (.gitattributes already pins the important types)
+'
   fi
   exit 0
 fi
@@ -106,26 +122,39 @@ if [ "$cmd_arg" = repair ]; then
     target=$(link_target "$p") || continue
     [ -d "$p" ] && continue
     if [ -e "$p" ] || [ -L "$p" ]; then
-      [ -f "$p" ] && [ ! -L "$p" ] && [ "$(cat "$p")" = "$target" ] \
-        || die "refusing $p: not a regular file holding the link target '$target'"
+      [ -f "$p" ] && [ ! -L "$p" ] && [ "$(cat "$p")" = "$target" ]         || die "refusing $p: not a regular file holding the link target '$target'"
     fi
   done <<< "$LINKS"
+  converted=
+  rollback() {  # <message>: undo this run's links, then fail
+    local q qt
+    for q in $converted; do
+      MSYS_NO_PATHCONV=1 cmd /c rmdir "$(winpath "$TOP/$q")" >/dev/null 2>&1 || true
+      qt=$(link_target "$q") || continue
+      [ -e "$q" ] || [ -L "$q" ] || printf '%s' "$qt" > "$q"
+    done
+    die "$1"
+  }
   while IFS= read -r p; do
     target=$(link_target "$p") || continue
+    [ -d "$p" ] && continue
+    abs=$(cd "$(dirname "$p")" && cd "$target" && pwd) || rollback "link target of $p does not exist: $target"
+    rm -f "$p"
+    mkdir -p "$(dirname "$p")"
+    err=$(MSYS_NO_PATHCONV=1 cmd /c mklink /J "$(winpath "$TOP/$p")" "$(winpath "$abs")" 2>&1 || true)
     if [ ! -d "$p" ]; then
-      abs=$(cd "$(dirname "$p")" && cd "$target" && pwd) || die "link target of $p does not exist: $target"
-      rm -f "$p"
-      mkdir -p "$(dirname "$p")"
-      MSYS_NO_PATHCONV=1 cmd /c mklink /J "$(winpath "$TOP/$p")" "$(winpath "$abs")" >/dev/null 2>&1 || true
-      if [ ! -d "$p" ]; then
-        printf '%s' "$target" > "$p"
-        die "could not create a junction at $p; text file restored"
-      fi
+      printf '%s' "$target" > "$p"
+      rollback "could not create a junction at $p (mklink said: ${err:-nothing}); restored every text file changed in this run"
     fi
+    converted="$converted $p"
+  done <<< "$LINKS"
+  mkdir -p "$(dirname "$EXCLUDE")"
+  touch "$EXCLUDE"
+  while IFS= read -r p; do
+    link_target "$p" >/dev/null || continue
     git update-index --skip-worktree -- "$p"
-    mkdir -p "$(dirname "$EXCLUDE")"
-    touch "$EXCLUDE"
-    grep -Fxq "/$p" "$EXCLUDE" || printf '/%s\n' "$p" >> "$EXCLUDE"
+    grep -Fxq "/$p" "$EXCLUDE" || printf '/%s
+' "$p" >> "$EXCLUDE"
   done <<< "$LINKS"
   exit 0
 fi
@@ -140,9 +169,5 @@ while IFS= read -r p; do
     die "refusing $p: a real directory, not a junction"
   fi
   git update-index --no-skip-worktree -- "$p"
-  if [ -f "$EXCLUDE" ] && grep -Fxq "/$p" "$EXCLUDE"; then
-    grep -Fxv "/$p" "$EXCLUDE" > "$EXCLUDE.tmp" || true
-    mv "$EXCLUDE.tmp" "$EXCLUDE"
-  fi
   [ -e "$p" ] || git checkout -- "$p"
 done <<< "$LINKS"
