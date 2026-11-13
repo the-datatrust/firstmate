@@ -15,6 +15,7 @@ Prerequisites:
   Binary resolution uses an executable `FM_HC_BIN` override first, then `herdr-core` on `PATH`, then the `hc` alias.
   `hc` starts its own core on first use.
   [`bin/fm-install-hc.sh`](../bin/fm-install-hc.sh) owns installation usage and the checksum-verified release pin; updates remain operator-run.
+  On Windows under Git Bash, the same script installs the Windows x86_64 build and its `conpty/` directory.
 - `jq` for JSON responses.
 - The universal harness and toolchain requirements in [`configuration.md`](configuration.md#toolchain).
 

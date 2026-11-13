@@ -10,6 +10,11 @@
 #   fm-install-treehouse.sh <destination-directory>
 #
 # Pins Treehouse v2.0.1, the version exercised by the local real-Herdr suite.
+#
+# Platforms: linux and darwin (amd64, arm64) tarballs, plus Windows under Git
+# Bash, MSYS or Cygwin (x86_64 and arm64 zips). Windows zips are extracted with
+# Windows' own System32 tar.exe, because GNU tar cannot open zips, and install
+# `treehouse.exe` into the destination.
 set -eu
 
 FM_TREEHOUSE_CI_VERSION=2.0.1
@@ -44,6 +49,14 @@ case "${os}-${arch}" in
     ARCHIVE=treehouse-v${FM_TREEHOUSE_CI_VERSION}-darwin-amd64.tar.gz
     SHA256=1cf44580a5837f995e1d3bb74f4fbd3112b642acd20406087d9735a8106112fd
     ;;
+  MINGW*-x86_64|MSYS*-x86_64|CYGWIN*-x86_64)
+    ARCHIVE=treehouse-v${FM_TREEHOUSE_CI_VERSION}-windows-amd64.zip
+    SHA256=d4c7bebc876b6dc1f9cf2f2b934803234d4f2f6e1c1c314505db85e64f5100bc
+    ;;
+  MINGW*-aarch64|MINGW*-arm64|MSYS*-aarch64|MSYS*-arm64|CYGWIN*-aarch64|CYGWIN*-arm64)
+    ARCHIVE=treehouse-v${FM_TREEHOUSE_CI_VERSION}-windows-arm64.zip
+    SHA256=4cb39138565822c26f694a5594787b770296061247cc6f3a3b6852d7c4212381
+    ;;
   *)
     die "unsupported platform ${os}-${arch}; official Treehouse assets are linux/darwin amd64 and arm64"
     ;;
@@ -67,6 +80,22 @@ fi
 
 [ "$ACTUAL_SHA256" = "$SHA256" ] || die "checksum mismatch for $ARCHIVE (expected $SHA256, got $ACTUAL_SHA256)"
 
+case "$ARCHIVE" in
+  *.zip)
+    WIN_TAR="${SYSTEMROOT:-${WINDIR:-C:\Windows}}/System32/tar.exe"
+    [ -x "$WIN_TAR" ] || die "need Windows tar.exe at $WIN_TAR to extract $ARCHIVE"
+    "$WIN_TAR" -xf "$(cygpath -w "$TMP/$ARCHIVE")" -C "$(cygpath -w "$TMP")"       || die "could not extract $ARCHIVE"
+    [ -f "$TMP/treehouse.exe" ] || die "archive $ARCHIVE did not contain treehouse.exe"
+    mkdir -p "$DESTINATION"
+    install -m 0755 "$TMP/treehouse.exe" "$DESTINATION/treehouse.exe"
+    installed_version=$("$DESTINATION/treehouse" --version 2>/dev/null | tr -d '[:space:]')
+    [ "$installed_version" = "v${FM_TREEHOUSE_CI_VERSION}" ]       || die "installed treehouse version is '${installed_version:-<empty>}', expected exact pin v${FM_TREEHOUSE_CI_VERSION}"
+    printf 'fm-install-treehouse.sh: installed treehouse %s to %s
+'       "$installed_version" "$DESTINATION/treehouse" >&2
+    "$DESTINATION/treehouse" --version
+    exit 0
+    ;;
+esac
 tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
 # Archive layout: a single `treehouse` binary at the archive root (verified for v2.0.1).
 if [ -f "$TMP/treehouse" ]; then

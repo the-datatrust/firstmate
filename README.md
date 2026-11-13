@@ -87,6 +87,8 @@ git clone https://github.com/kunchenguid/firstmate
 cd firstmate
 ```
 
+A Windows clone without symlink support needs a checkout repair; see `bin/fm-windows-checkout.sh --help`.
+
 Then launch one of the co-primary harnesses; AGENTS.md takes over from there:
 
 **Claude Code**

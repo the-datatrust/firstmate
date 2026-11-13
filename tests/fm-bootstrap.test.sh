@@ -55,6 +55,15 @@ unset TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH PAS
 make_fake_toolchain() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
+  # This suite pins the portable install hints, so a Windows host reports Linux;
+  # tests/fm-install-windows.test.sh owns the Windows hints.
+  cat > "$fakebin/uname" <<'SH'
+#!/usr/bin/env bash
+out=$(command -p uname "$@")
+case "$out" in MINGW*|MSYS*|CYGWIN*) out=Linux ;; esac
+printf '%s\n' "$out"
+SH
+  chmod +x "$fakebin/uname"
   fm_fake_exit0 "$fakebin" tmux node chrome-devtools-axi
   fm_fake_version_tool "$fakebin" lavish-axi FM_FAKE_LAVISH_AXI_VERSION 0.1.80
   cat > "$fakebin/gh-axi" <<'SH'

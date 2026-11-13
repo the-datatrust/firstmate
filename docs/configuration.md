@@ -2366,6 +2366,8 @@ Every home requires:
 This section is the single owner of that universal toolchain list; backend guides' prerequisites point here and add only their backend-specific tools.
 
 In that list, no-mistakes runs the validation pipeline, gh-axi and chrome-devtools-axi cover GitHub and browser operations, and tasks-axi plus quota-axi back backlog mutations and quota-aware array dispatch.
+On Windows, `python3` must be a real Python on `PATH` under that name (a python.org install plus a `python3` shim, with the Microsoft Store alias disabled).
+On Windows, the Herdr app has its own installer at `herdrdev/herdr-app`.
 Lavish is a presentation-only dependency for visual decisions and reports; nonvisual work can proceed with plain text when it is unavailable.
 
 **Backend requirements**
@@ -2404,6 +2406,7 @@ A herdr, zellij, cmux, paseo, rex, t3code, or tern home is therefore never told 
 
 `tasks-axi` and `quota-axi` are essential bootstrap tools in every profile.
 An absent required tool with an automated install path reports `MISSING:` with its install command, while a present required tool below its floor or missing a required capability reports `OUTDATED:` with its installed version (or `unparseable`), requirement, and upgrade command; manual-only and presentation-only dependencies retain their dedicated diagnostics, and [`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh)'s header owns these exact line formats.
+Under Git Bash on Windows, the install commands are `winget` and PowerShell installers instead of `brew` and shell scripts, and the same header owns them.
 
 - An absent `treehouse` reports `MISSING:` with its install command, while an installed build without `treehouse get --lease` support reports `OUTDATED:` with the `treehouse update` upgrade.
 - An absent `no-mistakes` reports `MISSING:` with its install command, while a version below 1.46.0 or an unparseable version reports `OUTDATED:` with the `no-mistakes update` upgrade.
