@@ -94,9 +94,62 @@ test_treehouse_linux_asset_unchanged() {
   pass "treehouse installer: Linux still downloads the tarball"
 }
 
+# install_run <uname -s> <tool>: run `fm-bootstrap.sh install <tool>` with the
+# winget and powershell.exe stubs on PATH; print the echoed line, then the
+# stubbed invocations (argv joined by `|`).
+install_run() {
+  : > "$TMP/run.log"
+  FM_TEST_UNAME_S=$1 FM_TEST_UNAME_M=x86_64 FM_TEST_RUN_LOG="$TMP/run.log" \
+    PATH="$FAKEBIN:$PATH" bash "$ROOT/bin/fm-bootstrap.sh" install "$2" 2>&1 || true
+  cat "$TMP/run.log"
+}
+
+test_bootstrap_windows_winget_hints() {
+  local tool id out pair
+  for pair in node:OpenJS.NodeJS.LTS git:Git.Git gh:GitHub.cli jq:jqlang.jq; do
+    tool=${pair%%:*}
+    id=${pair#*:}
+    out=$(install_run "$WIN_S" "$tool")
+    case "$out" in
+      "installing $tool: winget install -e --id $id"*"winget|install|-e|--id|$id") ;;
+      *) fail "bootstrap install $tool on Windows ran: $out" ;;
+    esac
+  done
+  pass "bootstrap install: Windows node, git, gh and jq run winget with their package ids"
+}
+
+test_bootstrap_windows_powershell_hints() {
+  local out
+  out=$(install_run "$WIN_S" treehouse)
+  case "$out" in
+    *"powershell.exe|-NoProfile|-ExecutionPolicy|Bypass|-Command|irm https://kunchenguid.github.io/treehouse/install.ps1 | iex") ;;
+    *) fail "bootstrap install treehouse on Windows ran: $out" ;;
+  esac
+  out=$(install_run "$WIN_S" no-mistakes)
+  case "$out" in
+    *"powershell.exe|-NoProfile|-ExecutionPolicy|Bypass|-Command|irm https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.ps1 | iex") ;;
+    *) fail "bootstrap install no-mistakes on Windows ran: $out" ;;
+  esac
+  pass "bootstrap install: Windows treehouse and no-mistakes pass the whole irm | iex string to PowerShell"
+}
+
+test_bootstrap_linux_hint_unchanged() {
+  local out
+  out=$(install_run Linux treehouse)
+  case "$out" in
+    "installing treehouse: curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh"*) ;;
+    *) fail "bootstrap install treehouse on Linux printed: $out" ;;
+  esac
+  case "$out" in *powershell*|*winget*) fail "Linux hint mentions Windows tooling: $out" ;; esac
+  pass "bootstrap install: Linux treehouse hint is the existing shell installer"
+}
+
 fm_test_run \
   test_hc_windows_asset \
   test_hc_linux_asset_unchanged \
   test_hc_windows_arm64_refused \
   test_treehouse_windows_assets \
-  test_treehouse_linux_asset_unchanged
+  test_treehouse_linux_asset_unchanged \
+  test_bootstrap_windows_winget_hints \
+  test_bootstrap_windows_powershell_hints \
+  test_bootstrap_linux_hint_unchanged

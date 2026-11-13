@@ -28,6 +28,10 @@
 #                 "FMX: X mode on ..." or "FMX: X mode off ...",
 #                 "TREEHOUSE_POOL_REPORT: <pool finding or scan summary>" (only when
 #                 the config/treehouse-pool-report presence flag exists).
+#          Install hints are the portable brew and shell-installer commands. Under
+#          Git Bash, MSYS or Cygwin (`uname -s` MINGW*, MSYS* or CYGWIN*) node,
+#          git, gh, jq and curl use `winget install -e --id <id>`, and treehouse
+#          and no-mistakes use their upstream install.ps1 through powershell.exe.
 #          When a RUNNING secondmate home is fast-forwarded, its target is
 #          firstmate's own current default-branch commit. A local worktree uses
 #          a purely local fast-forward with no origin fetch; a remote route hands
@@ -867,7 +871,34 @@ secondmate_handoff_detect() {
   done
 }
 
+# Git Bash, MSYS and Cygwin report themselves through `uname -s`.
+is_windows_shell() {
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Windows install hints for the tools that have one; any other tool returns 1 so
+# install_cmd falls through to its portable entry. The PowerShell installers
+# fetch the tool's latest release and add it to the user PATH.
+windows_install_cmd() {
+  case "$1" in
+    node) echo "winget install -e --id OpenJS.NodeJS.LTS" ;;
+    git) echo "winget install -e --id Git.Git" ;;
+    gh) echo "winget install -e --id GitHub.cli" ;;
+    jq) echo "winget install -e --id jqlang.jq" ;;
+    curl) echo "winget install -e --id cURL.cURL" ;;
+    treehouse) echo "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"irm https://kunchenguid.github.io/treehouse/install.ps1 | iex\"" ;;
+    no-mistakes) echo "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"irm https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.ps1 | iex\"" ;;
+    *) return 1 ;;
+  esac
+}
+
 install_cmd() {
+  if is_windows_shell && windows_install_cmd "$1"; then
+    return 0
+  fi
   case "$1" in
     tmux|node|git|gh|curl|jq|orca|zellij) echo "brew install $1  # or the platform's package manager" ;;
     cmux) echo "brew install --cask cmux  # or see https://cmux.com" ;;
