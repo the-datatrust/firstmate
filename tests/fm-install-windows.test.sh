@@ -122,12 +122,12 @@ test_bootstrap_windows_powershell_hints() {
   local out
   out=$(install_run "$WIN_S" treehouse)
   case "$out" in
-    *"powershell.exe|-NoProfile|-ExecutionPolicy|Bypass|-Command|irm https://kunchenguid.github.io/treehouse/install.ps1 | iex") ;;
+    "installing treehouse: powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"irm https://kunchenguid.github.io/treehouse/install.ps1 | iex\""*"powershell.exe|-NoProfile|-ExecutionPolicy|Bypass|-Command|irm https://kunchenguid.github.io/treehouse/install.ps1 | iex") ;;
     *) fail "bootstrap install treehouse on Windows ran: $out" ;;
   esac
   out=$(install_run "$WIN_S" no-mistakes)
   case "$out" in
-    *"powershell.exe|-NoProfile|-ExecutionPolicy|Bypass|-Command|irm https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.ps1 | iex") ;;
+    "installing no-mistakes: powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"irm https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.ps1 | iex\""*"powershell.exe|-NoProfile|-ExecutionPolicy|Bypass|-Command|irm https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.ps1 | iex") ;;
     *) fail "bootstrap install no-mistakes on Windows ran: $out" ;;
   esac
   pass "bootstrap install: Windows treehouse and no-mistakes pass the whole irm | iex string to PowerShell"

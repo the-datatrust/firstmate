@@ -30,7 +30,7 @@
 #                 the config/treehouse-pool-report presence flag exists).
 #          Install hints are the portable brew and shell-installer commands. Under
 #          Git Bash, MSYS or Cygwin (`uname -s` MINGW*, MSYS* or CYGWIN*) node,
-#          git, gh, jq and curl use `winget install -e --id <id>`, and treehouse
+#          git, gh and jq use `winget install -e --id <id>`, and treehouse
 #          and no-mistakes use their upstream install.ps1 through powershell.exe.
 #          When a RUNNING secondmate home is fast-forwarded, its target is
 #          firstmate's own current default-branch commit. A local worktree uses
@@ -888,7 +888,6 @@ windows_install_cmd() {
     git) echo "winget install -e --id Git.Git" ;;
     gh) echo "winget install -e --id GitHub.cli" ;;
     jq) echo "winget install -e --id jqlang.jq" ;;
-    curl) echo "winget install -e --id cURL.cURL" ;;
     treehouse) echo "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"irm https://kunchenguid.github.io/treehouse/install.ps1 | iex\"" ;;
     no-mistakes) echo "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"irm https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.ps1 | iex\"" ;;
     *) return 1 ;;
