@@ -1,2 +1,11 @@
 # Bash parses shell scripts with LF line endings on every supported platform.
 *.sh text eol=lf
+# Other scripts parsed on every platform keep LF too.
+*.mjs text eol=lf
+*.py text eol=lf
+*.jq text eol=lf
+*.pl text eol=lf
+*.ts text eol=lf
+# Recorded fixtures and captures are byte-exact; these lines come last so they win.
+tests/fixtures/** -text
+tests/captures/** -text
