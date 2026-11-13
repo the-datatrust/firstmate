@@ -87,6 +87,9 @@ git clone https://github.com/kunchenguid/firstmate
 cd firstmate
 ```
 
+On Windows under Git Bash, clone with `git clone -c core.autocrlf=false`.
+Without Developer Mode, git checks the tracked directory links out as text files, so run `bin/fm-windows-checkout.sh repair` once (`undo` reverses it; its header owns the details).
+
 Then launch one of the co-primary harnesses; AGENTS.md takes over from there:
 
 **Claude Code**

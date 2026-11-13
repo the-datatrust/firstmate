@@ -32,6 +32,11 @@
 #          Git Bash, MSYS or Cygwin (`uname -s` MINGW*, MSYS* or CYGWIN*) node,
 #          git, gh and jq use `winget install -e --id <id>`, and treehouse
 #          and no-mistakes use their upstream install.ps1 through powershell.exe.
+#          Also on Windows only, a clone whose tracked directory links are text
+#          files (bin/fm-windows-checkout.sh check) reports
+#          "MISSING: windows-checkout (install: bin/fm-windows-checkout.sh repair)",
+#          so the same approve-then-install flow runs the repair; the MISSING form
+#          is the closest fit because that flow only consumes it.
 #          When a RUNNING secondmate home is fast-forwarded, its target is
 #          firstmate's own current default-branch commit. A local worktree uses
 #          a purely local fast-forward with no origin fetch; a remote route hands
@@ -888,6 +893,7 @@ windows_install_cmd() {
     git) echo "winget install -e --id Git.Git" ;;
     gh) echo "winget install -e --id GitHub.cli" ;;
     jq) echo "winget install -e --id jqlang.jq" ;;
+    windows-checkout) echo "bin/fm-windows-checkout.sh repair" ;;
     treehouse) echo "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"irm https://kunchenguid.github.io/treehouse/install.ps1 | iex\"" ;;
     no-mistakes) echo "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"irm https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.ps1 | iex\"" ;;
     *) return 1 ;;
@@ -1567,6 +1573,10 @@ detect_local_tools() {
   for t in $COMMON_TOOLS; do
     command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
   done
+  # Windows only: a clone without symlinks leaves directory links as text files.
+  if is_windows_shell     && "$SCRIPT_DIR/fm-windows-checkout.sh" check 2>/dev/null | grep -q '^WINDOWS_CHECKOUT: broken-link '; then
+    missing_tool_diagnostic windows-checkout
+  fi
   # The treehouse lease-support upgrade check is only relevant when the resolved
   # backend actually requires treehouse (every backend except orca, which owns its
   # own worktrees); an orca home must not be told to upgrade a provider it never uses.
