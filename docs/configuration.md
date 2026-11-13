@@ -2404,6 +2404,7 @@ A herdr, zellij, cmux, paseo, rex, t3code, or tern home is therefore never told 
 
 `tasks-axi` and `quota-axi` are essential bootstrap tools in every profile.
 An absent required tool with an automated install path reports `MISSING:` with its install command, while a present required tool below its floor or missing a required capability reports `OUTDATED:` with its installed version (or `unparseable`), requirement, and upgrade command; manual-only and presentation-only dependencies retain their dedicated diagnostics, and [`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh)'s header owns these exact line formats.
+Under Git Bash on Windows, the install commands are `winget` and PowerShell installers instead of `brew` and shell scripts, and the same header owns them.
 
 - An absent `treehouse` reports `MISSING:` with its install command, while an installed build without `treehouse get --lease` support reports `OUTDATED:` with the `treehouse update` upgrade.
 - An absent `no-mistakes` reports `MISSING:` with its install command, while a version below 1.46.0 or an unparseable version reports `OUTDATED:` with the `no-mistakes update` upgrade.
