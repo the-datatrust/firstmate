@@ -1,0 +1,393 @@
+name: Windows hc spike
+
+# Measurement-only spike: does herdr-core (hc) 0.1.21 behave under Git Bash on
+# a clean windows-latest runner the way the laptop measurements say? Records
+# raw output; a negative result never fails the job. Needs no secrets.
+
+on:
+  push:
+    branches: [spike/windows-hc]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  HC_VERSION: "0.1.21"
+  HC_SESSION: fm-spike-windows-hc
+  BASH_ARGV_WIN: 'C:\Program Files\Git\bin\bash.exe'
+
+jobs:
+  measure:
+    name: Measure hc under Git Bash
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install herdr-core (pinned) and check jq
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $ProgressPreference = 'SilentlyContinue'
+          Write-Host "Installing herdr-core $env:HC_VERSION with the official install.ps1"
+          irm https://releases.herdr.dev/core/install.ps1 | iex
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\herdr-core'
+          Get-ChildItem $dir | Format-Table Name, Length | Out-String | Write-Host
+          $dir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & "$dir\herdr-core.exe" --version
+          $jq = Get-Command jq.exe -ErrorAction SilentlyContinue
+          if ($jq) {
+            Write-Host "jq on image: $($jq.Source)"
+            & $jq.Source --version
+          } else {
+            Write-Host "jq missing from the image; installing with choco"
+            choco install jq --no-progress --limit-output -y
+            $jq = Get-Command jq.exe -ErrorAction SilentlyContinue
+            if ($jq) { Split-Path -Parent $jq.Source | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8 }
+          }
+
+      - name: Write measurement helpers
+        run: |
+          R="$RUNNER_TEMP/results"
+          mkdir -p "$R"
+          cat >"$RUNNER_TEMP/walk.ps1" <<'PS1'
+          param([int]$RootPid)
+          $all = @(Get-CimInstance Win32_Process)
+          $root = $all | Where-Object { $_.ProcessId -eq $RootPid }
+          if ($root) { "ROOT pid=$RootPid name=$($root.Name)" } else { "ROOT pid=$RootPid not running" }
+          $seen = New-Object 'System.Collections.Generic.HashSet[int]'
+          $q = New-Object 'System.Collections.Generic.Queue[int]'
+          [void]$seen.Add($RootPid); $q.Enqueue($RootPid)
+          $node = $false
+          while ($q.Count -gt 0) {
+            $p = $q.Dequeue()
+            foreach ($c in ($all | Where-Object { $_.ParentProcessId -eq $p })) {
+              if ($seen.Add([int]$c.ProcessId)) {
+                $q.Enqueue([int]$c.ProcessId)
+                "DESC pid=$($c.ProcessId) ppid=$($c.ParentProcessId) name=$($c.Name)"
+                if ($c.Name -ieq 'node.exe') { $node = $true }
+              }
+            }
+          }
+          "NODE_IN_DESCENDANTS=$node"
+          $any = @($all | Where-Object { $_.Name -ieq 'node.exe' -and $_.CommandLine -like '*setTimeout*' }).Count
+          "NODE_STANDIN_ANYWHERE=$($any -gt 0)"
+          PS1
+          cat >"$RUNNER_TEMP/lib.sh" <<'LIB'
+          set +e +o pipefail
+          R="$RUNNER_TEMP/results"
+          mkdir -p "$R"
+          WALK=$(cygpath -w "$RUNNER_TEMP/walk.ps1")
+          BASHW='C:\Program Files\Git\bin\bash.exe'
+          # hc from a clean env: dedicated session, no inherited core or terminal.
+          H() { env -u HC_SOCKET -u HC_TERMINAL_ID -u HC_TERMINAL_SOCKET -u HC_SCOPE HC_SESSION="$HC_SESSION" hc "$@" </dev/null; }
+          kv() { printf '%s\t%s\n' "$1" "$2" >>"$R/summary.tsv"; }
+          sec() { printf '\n===== %s =====\n' "$*"; }
+          run() { printf '\n$ %s\n' "$*"; "$@" 2>&1; printf '[rc=%s]\n' "$?"; }
+          # newpane <label> <cwd> <argv...>: mirrors hc.sh create_task; prints the address.
+          newpane() {
+            local label=$1 cwd=$2 out
+            shift 2
+            out=$(H run --bg --json --no-parent --outlive-parent --no-notify \
+              --cwd "$cwd" --label "firstmate.task=$label" --label "firstmate.home=spike" \
+              --label "herdr.space=fm-spike" --label "herdr.tab=spike-$label" -- "$@" 2>&1)
+            printf 'RUN OUT (%s): %s\n' "$label" "$out" >&2
+            printf '%s' "$out" | jq -r '.address // empty' 2>/dev/null | tr -d '\r'
+          }
+          # waitfg <t>: wait up to 25s for a foreground pid, then let the prompt print.
+          waitfg() {
+            local i
+            for i in $(seq 1 50); do
+              H get --json "$1" 2>/dev/null | jq -e '.foreground.pid' >/dev/null 2>&1 && break
+              sleep 0.5
+            done
+            printf 'waitfg %s: iterations=%s\n' "$1" "$i"
+            sleep 4
+          }
+          # waittext <t> <ERE> <secs>: poll hc read until the pattern shows.
+          waittext() {
+            local i
+            for ((i = 0; i < $3 * 2; i++)); do
+              H read "$1" --lines 60 2>&1 | grep -qE "$2" && return 0
+              sleep 0.5
+            done
+            return 1
+          }
+          snap() { printf '\n--- hc read %s (tail) ---\n' "$1"; H read "$1" --lines 40 2>&1 | tail -${2:-15}; }
+          fgpid() { H get --json "$1" 2>/dev/null | jq -r '.foreground.pid // empty' | tr -d '\r'; }
+          walk() { printf '\n--- descendant walk from %s ---\n' "$1"; { time powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$WALK" -RootPid "${1:-0}"; } 2>&1; }
+          psw() { printf '\n--- ps -W ---\n'; { time ps -W; } 2>&1 | grep -iE 'node|sleep|bash|pwsh|real|user|sys|PID' | head -20; }
+          ensure_server() {
+            printf 'server status at step start:\n'; H server status 2>&1
+            H server start 2>&1 | tail -3
+          }
+          LIB
+          bash -n "$RUNNER_TEMP/lib.sh" && echo "lib.sh syntax ok"
+          : >"$R/summary.tsv"
+
+      - name: Start hc core from a clean environment
+        continue-on-error: true
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          {
+            sec "start core (HC_SESSION=$HC_SESSION, HC_SOCKET unset)"
+            printf 'HC_SOCKET=%s HC_TERMINAL_ID=%s\n' "${HC_SOCKET:-<unset>}" "${HC_TERMINAL_ID:-<unset>}"
+            run which hc herdr-core jq node pwsh powershell.exe
+            run hc --version
+            run H --version
+            run H server start
+            run H server status
+            run H ls --json
+            kv "hc --version" "$(H --version 2>&1 | tr -d '\r\n')"
+            kv "jq --version" "$(jq --version 2>&1 | tr -d '\r\n')"
+            kv "core started" "$(H server status 2>&1 | head -1 | tr -d '\r')"
+          } 2>&1 | tee -a "$R/00-core.log"
+
+      - name: "M1: shell identity (step shell vs pane)"
+        continue-on-error: true
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          {
+            ensure_server
+            sec "M1 step shell"
+            echo "step: OSTYPE=$OSTYPE uname=$(uname -s) MSYSTEM=$MSYSTEM BASH_VERSION=$BASH_VERSION"
+            kv "M1 step shell" "OSTYPE=$OSTYPE; uname -s=$(uname -s); MSYSTEM=$MSYSTEM; BASH_VERSION=$BASH_VERSION"
+            cwd=$(cygpath -w "$GITHUB_WORKSPACE")
+
+            sec "M1 bash pane"
+            t=$(newpane m1-bash "$cwd" "$BASHW" --login -i)
+            echo "address=$t"
+            if [ -n "$t" ]; then
+              waitfg "$t"
+              H get --json "$t"
+              H send "$t" -- 'echo "R1:$OSTYPE|$(uname -s)|$MSYSTEM|$BASH_VERSION"'
+              waittext "$t" 'R1:[^$]' 15 && found=yes || found=no
+              snap "$t"
+              line=$(H read "$t" --lines 60 2>&1 | grep -E 'R1:[^$]' | tail -1 | tr -d '\r')
+              kv "M1 bash pane" "line=${line:-<none>}"
+            else
+              kv "M1 bash pane" "hc run returned no address"
+            fi
+
+            sec "M1 pwsh pane (control)"
+            p=$(newpane m1-pwsh "$cwd" pwsh.exe -NoLogo)
+            echo "address=$p"
+            if [ -n "$p" ]; then
+              waitfg "$p"
+              H get --json "$p"
+              H send "$p" -- 'Write-Output "R1:$($PSVersionTable.PSVersion)|OS=$env:OS|OSTYPE=$env:OSTYPE|MSYSTEM=$env:MSYSTEM"'
+              waittext "$p" 'R1:[0-9]' 15
+              snap "$p"
+              line=$(H read "$p" --lines 60 2>&1 | grep -E 'R1:[0-9]' | tail -1 | tr -d '\r')
+              kv "M1 pwsh pane" "line=${line:-<none>}"
+            else
+              kv "M1 pwsh pane" "hc run returned no address"
+            fi
+          } 2>&1 | tee -a "$R/01-m1-identity.log"
+
+      - name: "M2 (Q1): create_task mirror and handoff lines"
+        continue-on-error: true
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          {
+            ensure_server
+            cwd=$(cygpath -w "$GITHUB_WORKSPACE")
+            posix=$(cygpath -u "$GITHUB_WORKSPACE")
+            sec "Q1 bash pane, cwd=$cwd posix=$posix"
+            t=$(newpane q1 "$cwd" "$BASHW" --login -i)
+            echo "address=$t"
+            if [ -n "$t" ]; then
+              waitfg "$t"
+              H get --json "$t"
+              H send "$t" -- "cd -- '$posix'"; sleep 1
+              H send "$t" -- 'export FM_TASK_ID=spike'; sleep 1
+              H send "$t" -- 'export GOTMPDIR=/tmp/x/gotmp'; sleep 1
+              H send "$t" -- 'export COMPACT_ADVISER_DISABLE=1'; sleep 1
+              H send "$t" -- 'echo "OK:$FM_TASK_ID:$PWD:$OSTYPE"'
+              waittext "$t" 'OK:spike:' 15 && ok=yes || ok=no
+              H send "$t" -- 'echo "ENV2:$GOTMPDIR:$COMPACT_ADVISER_DISABLE"'; sleep 2
+              snap "$t" 25
+              line=$(H read "$t" --lines 60 2>&1 | grep -E 'OK:spike:' | tail -1 | tr -d '\r')
+              echo "Q1 OK line found: $ok ($line)"
+              kv "Q1 OK: line appears" "$ok; line=${line:-<none>}"
+            else
+              kv "Q1 OK: line appears" "no address (hc run failed)"
+            fi
+          } 2>&1 | tee -a "$R/02-q1.log"
+
+      - name: "M3 (Q2): hc get while idle, sleep, native stand-in"
+        continue-on-error: true
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          q2() {  # <label> <sleep line> <argv...>
+            local label=$1 sleepline=$2 t pid
+            shift 2
+            sec "Q2 $label"
+            t=$(newpane "q2-$label" "$(cygpath -w "$GITHUB_WORKSPACE")" "$@")
+            echo "address=$t"
+            [ -n "$t" ] || { kv "Q2 $label" "no address"; return; }
+            waitfg "$t"
+            echo "## idle"; H get --json "$t"; pid=$(fgpid "$t"); echo "fg pid=$pid"; walk "$pid"
+            kv "Q2 $label idle fg" "$(H get --json "$t" | jq -c '[.foreground.name,.foreground.pid,.state,.status]' 2>&1 | tr -d '\r')"
+
+            echo "## sleep running"; H send "$t" -- "$sleepline"; sleep 4
+            H get --json "$t"; pid=$(fgpid "$t"); echo "fg pid=$pid"; walk "$pid"; psw
+            kv "Q2 $label sleep fg" "$(H get --json "$t" | jq -c '[.foreground.name,.foreground.pid,.state,.status]' 2>&1 | tr -d '\r')"
+            H keys "$t" ctrl+c; sleep 3
+            echo "## after sleep interrupt"; H get --json "$t"
+
+            echo "## node stand-in running"
+            H send "$t" -- 'node -e "setTimeout(()=>{},60000)"'; sleep 5
+            H get --json "$t"; pid=$(fgpid "$t"); echo "fg pid=$pid"
+            w=$(walk "$pid"); printf '%s\n' "$w"; psw
+            kv "Q2 $label node fg" "$(H get --json "$t" | jq -c '[.foreground.name,.foreground.pid,.state,.status]' 2>&1 | tr -d '\r')"
+            kv "Q2 $label node walk" "$(printf '%s' "$w" | grep -E 'NODE_|ROOT' | tr -d '\r' | tr '\n' ' ')"
+            kv "Q2 $label walk time" "$(printf '%s' "$w" | grep -E '^real' | tr -d '\r')"
+            H keys "$t" ctrl+c; sleep 4
+            echo "## after node exit"; H get --json "$t"; pid=$(fgpid "$t"); echo "fg pid=$pid"
+            w=$(walk "$pid"); printf '%s\n' "$w"
+            kv "Q2 $label after-exit fg" "$(H get --json "$t" | jq -c '[.foreground.name,.foreground.pid,.state,.status]' 2>&1 | tr -d '\r')"
+            kv "Q2 $label after-exit walk" "$(printf '%s' "$w" | grep -E 'NODE_' | tr -d '\r' | tr '\n' ' ')"
+          }
+          {
+            ensure_server
+            q2 bash 'sleep 30' "$BASHW" --login -i
+            q2 pwsh 'Start-Sleep 30' pwsh.exe -NoLogo
+          } 2>&1 | tee -a "$R/03-q2.log"
+
+      - name: "M4 (Q3): CR in pipes, path conversion of sent text and cwd"
+        continue-on-error: true
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          {
+            ensure_server
+            cwd=$(cygpath -w "$GITHUB_WORKSPACE")
+            posix=$(cygpath -u "$GITHUB_WORKSPACE")
+            mixed=$(cygpath -m "$GITHUB_WORKSPACE")
+            t=$(newpane q3 "$cwd" "$BASHW" --login -i)
+            echo "address=$t"
+            waitfg "$t"
+
+            sec "Q3 trailing bytes through pipes"
+            for spec in 'hc --version' 'hc ls --json' "hc get --json $t" "hc get --json $t|jq -r .address" "hc ls --json|jq -r '.terminals[]?.address'"; do
+              printf '\n--- %s ---\n' "$spec"
+              case "$spec" in
+                *'|jq'*) first=${spec%%|*}; second=${spec#*|}
+                  H ${first#hc } | eval "$second" | od -c | tail -3 ;;
+                *) H ${spec#hc } | od -c | tail -3 ;;
+              esac
+              case "$spec" in
+                *'|jq'*) first=${spec%%|*}; second=${spec#*|}
+                  n=$(H ${first#hc } | eval "$second" | grep -c $'\r') ;;
+                *) n=$(H ${spec#hc } | grep -c $'\r') ;;
+              esac
+              echo "lines_with_CR=$n"
+              kv "Q3 CR: $spec" "lines_with_CR=$n"
+            done
+
+            sec "Q3 hc send 'echo /exit' with and without MSYS_NO_PATHCONV"
+            H send "$t" -- 'echo /exit'; sleep 2
+            MSYS_NO_PATHCONV=1 H send "$t" -- 'echo /exit'; sleep 2
+            H send "$t" -- '/exit'; sleep 2
+            MSYS_NO_PATHCONV=1 H send "$t" -- '/exit'; sleep 2
+            snap "$t" 25
+            kv "Q3 send text (echo /exit, /exit)" "$(H read "$t" --lines 60 2>&1 | grep -E 'exit' | grep -vE '^.*\$ ' | tr -d '\r' | tr '\n' '~' | cut -c1-400)"
+
+            sec "Q3 cwd variants"
+            cwdcheck() {  # <tag> <cwdarg> [env assignment]
+              local tag=$1 c=$2 a
+              a=$(newpane "q3-$tag" "$c" "$BASHW" --login -i)
+              echo "[$tag] cwd arg=$c address=${a:-<none>}"
+              if [ -z "$a" ]; then kv "Q3 cwd $tag" "hc run failed for cwd=$c"; return; fi
+              waitfg "$a"
+              H get --json "$a" | jq -c '[.cwd,.foreground.cwd,.state]'
+              H send "$a" -- 'echo "PW:$(pwd)|$(pwd -W)"'; waittext "$a" 'PW:/' 10
+              snap "$a" 6
+              kv "Q3 cwd $tag" "arg=$c get=$(H get --json "$a" | jq -c '[.cwd,.foreground.cwd]' | tr -d '\r') pane=$(H read "$a" --lines 40 2>&1 | grep -E 'PW:/' | tail -1 | tr -d '\r')"
+            }
+            echo "# A: posix cwd, default conversion"
+            cwdcheck posix-conv "$posix"
+            echo "# B: posix cwd, MSYS_NO_PATHCONV=1"
+            MSYS_NO_PATHCONV=1 cwdcheck posix-nopathconv "$posix"
+            echo "# C: C:/ cwd, MSYS_NO_PATHCONV=1"
+            MSYS_NO_PATHCONV=1 cwdcheck mixed-nopathconv "$mixed"
+            echo "# D: C:/ cwd, default conversion"
+            cwdcheck mixed-conv "$mixed"
+          } 2>&1 | tee -a "$R/04-q3.log"
+
+      - name: "M5: symlink check"
+        continue-on-error: true
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          {
+            sec "symlinks"
+            run git config --show-origin --get core.symlinks
+            run git config --get core.symlinks
+            run ls -la .claude
+            run ls -la .claude/skills
+            run git ls-files -s .claude/skills
+            run git ls-tree HEAD .claude/skills
+            if [ -L .claude/skills ]; then sl=symlink; else sl="not a symlink"; fi
+            echo ".claude/skills: $sl"
+            echo "content: $(head -c 120 .claude/skills 2>&1)"
+            kv "M5 core.symlinks" "$(git config --get core.symlinks 2>&1) (origin: $(git config --show-origin --get core.symlinks 2>&1 | cut -f1))"
+            kv "M5 .claude/skills" "$sl; size=$(stat -c %s .claude/skills 2>&1); head=$(head -c 60 .claude/skills 2>&1 | tr -d '\r\n')"
+          } 2>&1 | tee -a "$R/05-symlink.log"
+
+      - name: Clean up hc terminals and core
+        if: always()
+        continue-on-error: true
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          {
+            sec cleanup
+            H ls --json --all 2>&1 | head -c 3000
+            for a in $(H ls --json --all 2>/dev/null | jq -r '.terminals[]?.address' | tr -d '\r'); do
+              H kill "$a" 2>&1; H rm "$a" 2>&1
+            done
+            run H ls --json --all
+            run H server stop
+            run H server status
+          } 2>&1 | tee -a "$R/06-cleanup.log"
+
+      - name: Summary and results artifact
+        if: always()
+        continue-on-error: true
+        run: |
+          . "$RUNNER_TEMP/lib.sh"
+          S="$R/summary.md"
+          {
+            echo '## Windows hc spike'
+            echo
+            echo "- Runner: \`${RUNNER_OS}\` / \`${RUNNER_ARCH}\`, image \`${ImageOS:-?}\` \`${ImageVersion:-?}\`"
+            echo "- hc pin: \`$HC_VERSION\`; session \`$HC_SESSION\`"
+            echo
+            echo '| Measurement | Result |'
+            echo '| --- | --- |'
+            awk -F'\t' '{ gsub(/\|/, "\\|", $2); printf "| %s | `%s` |\n", $1, $2 }' "$R/summary.tsv"
+            echo
+            for f in "$R"/0*.log; do
+              echo "<details><summary>$(basename "$f")</summary>"
+              echo
+              echo '```text'
+              head -c 60000 "$f" | tr -d '\r'
+              echo
+              echo '```'
+              echo "</details>"
+              echo
+            done
+          } >"$S"
+          head -c 900000 "$S" >>"$GITHUB_STEP_SUMMARY"
+          echo "summary bytes: $(wc -c <"$S")"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-hc-spike-results
+          path: ${{ runner.temp }}/results/
+          if-no-files-found: warn
