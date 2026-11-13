@@ -62,6 +62,7 @@ make_clone() {
   git -C "$origin" add .agents/skills/a .claude/mods
   git -C "$origin" -c user.name=t -c user.email=t@example.test commit -qm init
   git -c core.symlinks=false clone -q "$origin" "$clone"
+  git -C "$clone" config core.symlinks false
   printf '%s\n' "$clone"
 }
 
@@ -140,7 +141,7 @@ test_undo_restores_and_is_idempotent() {
   [ -z "$(git -C "$clone" status --porcelain)" ] || fail "status after undo: $(git -C "$clone" status --porcelain)"
   ex=$(git -C "$clone" rev-parse --git-path info/exclude)
   ! grep -q '^/.claude/skills$' "$clone/$ex" || fail "exclude line remains"
-  [ -z "$(git -C "$clone" ls-files -v .claude/skills | grep '^S')" ] || fail "skip-worktree remains"
+  ! git -C "$clone" ls-files -v .claude/skills | grep -q '^S' || fail "skip-worktree remains"
   run "$WIN_S" "$clone" undo || fail "second undo failed"
   pass "windows-checkout: undo restores the tracked files, flags and exclude, and is idempotent"
 }
