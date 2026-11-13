@@ -834,8 +834,8 @@ tests/fm-host-mirror.test.sh 11587
 tests/fm-inactive-reconcile.test.sh 60823
 tests/fm-inbox.test.sh 6062
 tests/fm-install-herdr.test.sh 1000
-tests/fm-install-windows.test.sh 30000
-tests/fm-windows-checkout.test.sh 150000
+tests/fm-install-windows.test.sh 1500
+tests/fm-windows-checkout.test.sh 4000
 tests/fm-jev-mem-guard.test.sh 336
 tests/fm-kimi-harness.test.sh 58917
 tests/fm-kimi-trust-prompt-live-e2e.test.sh 60
