@@ -123,7 +123,7 @@ jobs:
           snap() { printf '\n--- hc read %s (tail) ---\n' "$1"; H read "$1" --lines 40 2>&1 | tail -${2:-15}; }
           fgpid() { H get --json "$1" 2>/dev/null | jq -r '.foreground.pid // empty' | tr -d '\r'; }
           walk() { printf '\n--- descendant walk from %s ---\n' "$1"; { time powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$WALK" -RootPid "${1:-0}"; } 2>&1; }
-          psw() { printf '\n--- ps -W ---\n'; { time ps -W; } 2>&1 | grep -iE 'node\.exe|sleep|bash\.exe|pwsh\.exe|WINPID|^real|^user|^sys[[:space:]]' | head -30; }
+          psw() { printf '\n--- ps -W ---\n'; { time ps -W; } 2>&1 | grep -iE 'node[.]exe|sleep|bash[.]exe|pwsh[.]exe|WINPID|^real|^user|^sys[[:space:]]' | head -30; }
           ensure_server() {
             printf 'server status at step start:\n'; H server status 2>&1
             H server start 2>&1 | tail -3
@@ -239,10 +239,8 @@ jobs:
 
             echo "## sleep running"; H send "$t" -- "$sleepline"; sleep 4
             snap "$t" 6
-            H get --json "$t"; pid=$(fgpid "$t"); echo "fg pid=$pid"; w=$(walk "$pid"); printf '%s
-' "$w"; psw
-            kv "Q2 $label sleep walk" "$(printf '%s' "$w" | grep -E 'SLEEP_|NODE_|ROOT' | tr -d '' | tr '
-' ' ')"
+            H get --json "$t"; pid=$(fgpid "$t"); echo "fg pid=$pid"; w=$(walk "$pid"); printf '%s\n' "$w"; psw
+            kv "Q2 $label sleep walk" "$(printf '%s' "$w" | grep -E 'SLEEP_|NODE_|ROOT' | tr -d '\r' | tr '\n' ' ')"
             kv "Q2 $label sleep fg" "$(H get --json "$t" | jq -c '[.foreground.name,.foreground.pid,.state,.status]' 2>&1 | tr -d '\r')"
             H keys "$t" ctrl+c; sleep 3
             echo "## after sleep interrupt"; H get --json "$t"
@@ -303,8 +301,7 @@ jobs:
             H send "$t" -- '/exit'; sleep 2
             MSYS_NO_PATHCONV=1 H send "$t" -- '/exit'; sleep 2
             snap "$t" 25
-            kv "Q3 send text (echo /exit x2, then /exit x2)" "$(H read "$t" --lines 60 2>&1 | grep -E 'exit' | tr -d '' | tr '
-' '~' | cut -c1-500)"
+            kv "Q3 send text (echo /exit x2, then /exit x2)" "$(H read "$t" --lines 60 2>&1 | grep -E 'exit' | tr -d '\r' | tr '\n' '~' | cut -c1-500)"
 
             sec "Q3 cwd variants"
             cwdcheck() {  # <tag> <cwdarg> [env assignment]
